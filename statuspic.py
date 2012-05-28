@@ -52,8 +52,8 @@ class Photo(db.Model):
 def store_blob(blob_key, width, height):
     # XXX: filter out dupes
     serving_url = images.get_serving_url(blob_key)
-    photo = Photo(
-        blob_key=blob_key, width=width, height=height, serving_url=serving_url)
+    photo = Photo(blob_key=blob_key, width=width, height=height,
+                  image_serving_url=serving_url)
     photo.put()
     get_main_html(update=True)  # Update cache.
 
@@ -92,7 +92,7 @@ Grab File from Web: <input type="text" name="url"><input type="submit">
 >mail@statuspic.appspotmail.com</a>
 """
 
-def get_pics(update=False):
+def get_pics(update):
     key = 'main_page_pics'
     pics = memcache.get(key)
     if not pics or update:
@@ -103,7 +103,7 @@ def get_pics(update=False):
 
 
 def build_main_html(update=False):
-    pics = get_pics()
+    pics = get_pics(update)
     result = []
     result.append(main_html_head)
     grab_url = "/grab"
