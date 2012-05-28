@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import logging
 import os
 import urllib
 import urllib2
@@ -140,6 +141,8 @@ class UploadHandler(blobstore_handlers.BlobstoreUploadHandler):
         for blob_info in upload_files:
             if blob_info.content_type not in content_types.split(','):
                 # Ignore non-images.
+                logging.warning("Invalid mimetype %s, skipping"
+                                % blob_info.content_type)
                 blob_info.delete()
                 continue
 
@@ -154,10 +157,12 @@ class UploadHandler(blobstore_handlers.BlobstoreUploadHandler):
                 width, height = peekimagedata.peek_dimensions(data)
                 mimetype = peekimagedata.peek_mimetype(data)
             except ValueError:
+                logging.warning("Failed to peek, skipping")
                 blob_info.delete()
                 continue
 
             if blob_info.content_type != mimetype:
+                logging.warning("Sniffed mimetype didn't match, skipping")
                 blob_info.delete()
                 continue
             
@@ -229,6 +234,7 @@ def write_image_blob(data, name):
     _, ext = os.path.splitext(name)
     ext = ext.lower()
     if ext not in ['.png', '.jpg', '.jpeg']:
+        logging.warning("invalid extension on '%s', skipping" % name)
         return
 
     mimetype = {
@@ -241,9 +247,12 @@ def write_image_blob(data, name):
       sniffed_mimetype = peekimagedata.peek_mimetype(data)
       width, height = peekimagedata.peek_dimensions(data)
     except ValueError:
+      logging.warning("Failed to get dimensions/mimetype, skipping '%s'" % name)
       return
 
     if sniffed_mimetype != mimetype:
+        logging.warning("Invalid mimetype (%s, %s), skipping '%s'" %
+                        (sniffed_mimetype, mimetype, name))
         return
 
     # Note: Setting _blobinfo_uploaded_filename is extra-unsupported.
@@ -265,21 +274,27 @@ class ReceiveMailHandler(InboundMailHandler):
 
         # http://code.google.com/p/googleappengine/issues/detail?id=6342
         if not hasattr(message, 'attachments'):
+            logging.warning("No attachment on email")
             return
 
         for name, contents in received_mail.attachments:
             write_image_blob(contents.decode(), name)
 
+
 class GrabHandler(webapp2.RequestHandler):
     def post(self):
         url = self.request.get('url', '')
-        name = os.path.basename(urlparse.urlparse(url).path)
+        name = self.request.get('name', '')
+        if not name:
+            name = os.path.basename(urlparse.urlparse(url).path)
 
         _, ext = os.path.splitext(name)
         ext = ext.lower()
         if ext in ['.png', '.jpg', '.jpeg']:
             data = urllib2.urlopen(url).read()
             write_image_blob(data, name)
+        else:
+            logging.warning("invalid extension on '%s', skipping" % name)
             
         self.redirect('/')
 
