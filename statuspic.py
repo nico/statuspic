@@ -12,14 +12,49 @@ from google.appengine.ext.webapp import blobstore_handlers
 from google.appengine.ext import db
 
 from google.appengine.api import images
+from google.appengine.api import memcache
 
 from google.appengine.ext.webapp.mail_handlers import InboundMailHandler
+
+import peekimagedata
 
 
 class Photo(db.Model):
     created = db.DateTimeProperty(auto_now_add=True)
     blob_key = blobstore.BlobReferenceProperty(required=True)
-    # XXX: width / height?
+    width = db.IntegerProperty(required=True)
+    height = db.IntegerProperty(required=True)
+
+    # Computing serving urls takes > 50ms, so precompute them. They don't
+    # expire: https://groups.google.com/group/google-appengine/browse_thread/thread/9525f68cbe04d165
+    image_serving_url = db.StringProperty(required=True)
+
+    def serving_url(self, size=None, crop=False):
+        # get_serving_url() without a size requests a size=512 image, so
+        # pass the image size explicitly.
+        # https://groups.google.com/group/google-appengine/browse_thread/thread/35de7b4ed8a99d18
+        if not size:
+            size = max(self.width, self.height)
+        suffix = '=s%d' % size
+        if crop: suffix += '-c'
+        return self.image_serving_url + suffix
+
+    @staticmethod
+    def cached_by_id(photo_id):
+        key = 'photo_' + str(photo_id)
+        photo = memcache.get(key)
+        if not photo:
+            photo = Photo.get_by_id(photo_id)
+            memcache.set(key, photo)
+        return photo
+
+def store_blob(blob_key, width, height):
+    # XXX: filter out dupes
+    serving_url = images.get_serving_url(blob_key)
+    photo = Photo(
+        blob_key=blob_key, width=width, height=height, serving_url=serving_url)
+    photo.put()
+    get_main_html(update=True)  # Update cache.
 
 
 main_html_head = """\
@@ -27,11 +62,11 @@ main_html_head = """\
 <html lang="en"> 
 <head>
 <meta charset="utf-8">
-<title>Album</title>
+<title>statuspic</title>
 <style>
 body {
   max-width: 800px;
-  margin: auto;
+  margin: 20px auto;
 }
 img {
   vertical-align: text-bottom;
@@ -56,25 +91,47 @@ Grab File from Web: <input type="text" name="url"><input type="submit">
 >mail@statuspic.appspotmail.com</a>
 """
 
+def get_pics(update=False):
+    key = 'main_page_pics'
+    pics = memcache.get(key)
+    if not pics or update:
+        pics = db.GqlQuery("select * from Photo order by created desc limit 12")
+        pics = list(pics)
+        memcache.set(key, pics)
+    return pics
+
+
+def build_main_html(update=False):
+    pics = get_pics()
+    result = []
+    result.append(main_html_head)
+    grab_url = "/grab"
+    for pic in pics:
+        url = '/i/%s' % pic.key().id()
+        w = 200
+        thumb_url = pic.serving_url(size=w, crop=True)
+        result.append(
+            '<a href="%s"><img src="%s" width="%d" height="%d"></a\n>' %
+            (url, thumb_url, w, w))
+
+    # Needs to be an absolute URL!
+    upload_url = blobstore.create_upload_url('/upload')
+    result.append(main_html % (upload_url, content_types, grab_url))
+    return ''.join(result)
+
+
+def get_main_html(update=False):
+    key = 'main_page_html'
+    html = memcache.get(key)
+    if not html or update:
+        html = build_main_html(update)
+        memcache.set(key, html)
+    return html
+    
+
 class MainHandler(webapp2.RequestHandler):
     def get(self):
-        self.response.out.write(main_html_head)
-        grab_url = "grab"
-        pics = db.GqlQuery("select * from Photo order by created desc limit 12")
-        for pic in pics:
-            #url = 'serve/%s' % pic.blob_key.key()
-            url = 'id/%s' % pic.key().id()
-            w = 200
-            thumb_url = images.get_serving_url(pic.blob_key, size=w, crop=True)
-            self.response.out.write(
-                '<a href="%s"><img src="%s" width="%d" height="%d"></a\n>' %
-                (url, thumb_url, w, w))
-
-        # Needs to be an absolute URL!
-        upload_url = blobstore.create_upload_url('/upload')
-        self.response.out.write(main_html %
-                                (upload_url, content_types, grab_url))
-
+        self.response.write(get_main_html())
 
 class UploadHandler(blobstore_handlers.BlobstoreUploadHandler):
     def post(self):
@@ -85,10 +142,27 @@ class UploadHandler(blobstore_handlers.BlobstoreUploadHandler):
                 # Ignore non-images.
                 blob_info.delete()
                 continue
-            # XXX: filter out dupes
-            Photo(blob_key=blob_info.key()).put()
 
-        # Needs to be an absolute URL!
+            # images.Image doesn't have width and height when built from a
+            # blob_key.  The documentation doesn't state that it's safe to
+            # build an images.Image with partial data, so manually sniff image
+            # dimensions.
+            # http://thejapanesepage.com/phpbb/download/file.php?id=247 needs
+            # at least 150kB of image data.
+            data = blobstore.fetch_data(blob_info, 0, 200000) 
+            try:
+                width, height = peekimagedata.peek_dimensions(data)
+                mimetype = peekimagedata.peek_mimetype(data)
+            except ValueError:
+                blob_info.delete()
+                continue
+
+            if blob_info.content_type != mimetype:
+                blob_info.delete()
+                continue
+            
+            store_blob(blob_info.key(), width, height)
+
         self.redirect('/')
 
 
@@ -101,16 +175,92 @@ class ServeHandler(blobstore_handlers.BlobstoreDownloadHandler):
 
 class ServeIdHandler(blobstore_handlers.BlobstoreDownloadHandler):
     def get(self, resource):
-        photo = Photo.get_by_id(int(resource))
+        photo = Photo.cached_by_id(int(resource))
         if not photo: return
+        # Serving from photo.serving_url() would be a lot faster,
+        # but redirecting to there leaks the serving URL to the user. Since
+        # most people hopefully won't click through to the image, take the
+        # speed hit.
         self.send_blob(photo.blob_key)
+
+# Note: Instead of centering by setting an explicit width on body, wrapping
+# image and g+ button in a div, setting body to text-align:center and the div
+# to display:inline-block;text-align:left works too. However, that leads to
+# flashes if the image is less wide than the g+ button and the image loads first
+# (it usually does).
+# http://www.google.com/webmasters/+1/button/
+image_html = '''\
+<style>
+body {
+  width: %dpx;
+  margin: 20px auto;
+}
+</style>
+<a href="%s"><img src="%s" width="%d" height="%d"></a>
+<p><g:plusone size="medium" annotation="inline"></g:plusone></p>
+
+<script type="text/javascript">
+  (function() {
+    var po = document.createElement('script'); po.type = 'text/javascript'; po.async = true;
+    po.src = 'https://apis.google.com/js/plusone.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(po, s);
+  })();
+</script>
+'''
+class ServeImageHandler(webapp2.RequestHandler):
+    def get(self, resource):
+        photo = Photo.cached_by_id(int(resource))
+        if not photo:
+            self.abort(404)
+
+        # Images from get_serving_url() can be served at 0.5MB / 50ms. Serving
+        # the same image through a BlobstoreDownloadHandler takes 3s for the
+        # same image.
+        url = '../id/%s' % photo.key().id()
+        img_url = photo.serving_url()
+        self.response.out.write(
+            image_html % (photo.width, url, img_url, photo.width, photo.height))
 
 
 # NOTE: This is an experimental, unsupported api.
 from google.appengine.api import files
 
+def write_image_blob(data, name):
+    _, ext = os.path.splitext(name)
+    ext = ext.lower()
+    if ext not in ['.png', '.jpg', '.jpeg']:
+        return
+
+    mimetype = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+    }[ext]
+
+    try:
+      sniffed_mimetype = peekimagedata.peek_mimetype(data)
+      width, height = peekimagedata.peek_dimensions(data)
+    except ValueError:
+      return
+
+    if sniffed_mimetype != mimetype:
+        return
+
+    # Note: Setting _blobinfo_uploaded_filename is extra-unsupported.
+    file_name = files.blobstore.create(mime_type=mimetype,
+                                       _blobinfo_uploaded_filename=name)
+    with files.open(file_name, 'a') as f:
+      # XXX: filter out dupes
+      f.write(data)
+    files.finalize(file_name)
+
+    blob_key = files.blobstore.get_blob_key(file_name)
+    store_blob(blob_key, width, height)
+
+
 class ReceiveMailHandler(InboundMailHandler):
     def receive(self, received_mail):
+
         # XXX: Look at HTML input, grab <img> tags.
 
         # http://code.google.com/p/googleappengine/issues/detail?id=6342
@@ -118,28 +268,7 @@ class ReceiveMailHandler(InboundMailHandler):
             return
 
         for name, contents in received_mail.attachments:
-            _, ext = os.path.splitext(name)
-            ext = ext.lower()
-            if ext not in ['.png', '.jpg', '.jpeg']:
-              continue
-            # XXX should content-sniff too
-            # XXX could probably get mimetype from attachment headers using
-            # received_mail.original (a email.message.Message) somehow
-            mime_type = {
-              '.png': 'image/png',
-              '.jpg': 'image/jpeg',
-              '.jpeg': 'image/jpeg',
-            }[ext]
-            # XXX Setting _blobinfo_uploaded_filename is extra-unsupported.
-            file_name = files.blobstore.create(mime_type=mime_type,
-                                               _blobinfo_uploaded_filename=name)
-            with files.open(file_name, 'a') as f:
-              # XXX: filter out dupes
-              f.write(contents.decode())  # Hope for the best!
-            files.finalize(file_name)
-
-            blob_key = files.blobstore.get_blob_key(file_name)
-            Photo(blob_key=blob_key).put()
+            write_image_blob(contents.decode(), name)
 
 class GrabHandler(webapp2.RequestHandler):
     def post(self):
@@ -150,26 +279,18 @@ class GrabHandler(webapp2.RequestHandler):
         ext = ext.lower()
         if ext in ['.png', '.jpg', '.jpeg']:
             data = urllib2.urlopen(url).read()
-
-            # XXX should content-sniff too
-            # XXX could probably get mimetype from url request
-            mime_type = {
-              '.png': 'image/png',
-              '.jpg': 'image/jpeg',
-              '.jpeg': 'image/jpeg',
-            }[ext]
-            # XXX Setting _blobinfo_uploaded_filename is extra-unsupported.
-            file_name = files.blobstore.create(mime_type=mime_type,
-                                               _blobinfo_uploaded_filename=name)
-            with files.open(file_name, 'a') as f:
-              # XXX: filter out dupes
-              f.write(data)  # Hope for the best!
-            files.finalize(file_name)
-
-            blob_key = files.blobstore.get_blob_key(file_name)
-            Photo(blob_key=blob_key).put()
+            write_image_blob(data, name)
             
         self.redirect('/')
+
+
+class ListAllHandler(webapp2.RequestHandler):
+    def get(self):
+        self.response.headers['Content-Type'] = 'text/plain'
+        pics = db.GqlQuery("select * from Photo order by created desc")
+        for pic in pics:
+            url = urlparse.urljoin(self.request.uri,'i/%s' % pic.key().id())
+            self.response.write(url + '\n')
 
 
 app = webapp2.WSGIApplication([
@@ -178,5 +299,7 @@ app = webapp2.WSGIApplication([
     ('/serve/([^/]+)?', ServeHandler),
     ('/id/([^/]+)?', ServeIdHandler),
     ('/grab', GrabHandler),
+    ('/i/([^/]+)?', ServeImageHandler),
+    ('/listall', ListAllHandler),
     ReceiveMailHandler.mapping(),
     ], debug=True)
