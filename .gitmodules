@@ -1,0 +1,3 @@
+[submodule "peekimagedata"]
+	path = peekimagedata
+	url = git://github.com/nico/peekimagedata.git
