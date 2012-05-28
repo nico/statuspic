@@ -111,6 +111,12 @@ from google.appengine.api import files
 
 class ReceiveMailHandler(InboundMailHandler):
     def receive(self, received_mail):
+        # XXX: Look at HTML input, grab <img> tags.
+
+        # http://code.google.com/p/googleappengine/issues/detail?id=6342
+        if not hasattr(message, 'attachments'):
+            return
+
         for name, contents in received_mail.attachments:
             _, ext = os.path.splitext(name)
             ext = ext.lower()
