@@ -39,8 +39,15 @@ class Photo(db.Model):
         # https://groups.google.com/group/google-appengine/browse_thread/thread/35de7b4ed8a99d18
         if not size:
             size = max(self.width, self.height)
+
+        if size > 1600:
+            # get_serving_url() can't handle size > 1600, fall back to slower
+            # manual blobstore serving in that case.
+            return '/id/%d' % self.key().id()
+
         suffix = '=s%d' % size
-        if crop: suffix += '-c'
+        if crop:
+            suffix += '-c'
         return self.image_serving_url + suffix
 
     @staticmethod
