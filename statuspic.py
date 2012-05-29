@@ -303,21 +303,11 @@ class GrabHandler(webapp2.RequestHandler):
         self.redirect('/')
 
 
-class ListAllHandler(webapp2.RequestHandler):
-    def get(self):
-        self.response.headers['Content-Type'] = 'text/plain'
-        pics = db.GqlQuery("select * from Photo order by created desc")
-        for pic in pics:
-            url = urlparse.urljoin(self.request.uri,'i/%s' % pic.key().id())
-            self.response.write(url + '\n')
-
-
 app = webapp2.WSGIApplication([
     ('/', MainHandler),
     ('/upload', UploadHandler),
     ('/id/([^/]+)?', ServeIdHandler),
     ('/grab', GrabHandler),
     ('/i/([^/]+)?', ServeImageHandler),
-    ('/listall', ListAllHandler),
     ReceiveMailHandler.mapping(),
     ], debug=True)
