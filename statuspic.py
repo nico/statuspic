@@ -181,13 +181,6 @@ class UploadHandler(blobstore_handlers.BlobstoreUploadHandler):
         self.redirect('/')
 
 
-class ServeHandler(blobstore_handlers.BlobstoreDownloadHandler):
-    def get(self, resource):
-        resource = str(urllib.unquote(resource))
-        blob_info = blobstore.BlobInfo.get(resource)
-        self.send_blob(blob_info)
-
-
 class ServeIdHandler(blobstore_handlers.BlobstoreDownloadHandler):
     def get(self, resource):
         photo = Photo.cached_by_id(int(resource))
@@ -322,7 +315,6 @@ class ListAllHandler(webapp2.RequestHandler):
 app = webapp2.WSGIApplication([
     ('/', MainHandler),
     ('/upload', UploadHandler),
-    ('/serve/([^/]+)?', ServeHandler),
     ('/id/([^/]+)?', ServeIdHandler),
     ('/grab', GrabHandler),
     ('/i/([^/]+)?', ServeImageHandler),
