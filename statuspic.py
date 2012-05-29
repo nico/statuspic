@@ -59,6 +59,7 @@ class Photo(db.Model):
             memcache.set(key, photo)
         return photo
 
+
 def store_blob(blob_key, width, height):
     # XXX: filter out dupes
     serving_url = images.get_serving_url(blob_key)
@@ -144,52 +145,6 @@ class MainHandler(webapp2.RequestHandler):
     def get(self):
         self.response.write(get_main_html())
 
-class UploadHandler(blobstore_handlers.BlobstoreUploadHandler):
-    def post(self):
-        # 'file' is file upload field in the form
-        upload_files = self.get_uploads('file')
-        for blob_info in upload_files:
-            if blob_info.content_type not in content_types.split(','):
-                # Ignore non-images.
-                logging.warning("Invalid mimetype %s, skipping"
-                                % blob_info.content_type)
-                blob_info.delete()
-                continue
-
-            # images.Image doesn't have width and height when built from a
-            # blob_key.  The documentation doesn't state that it's safe to
-            # build an images.Image with partial data, so manually sniff image
-            # dimensions.
-            # http://thejapanesepage.com/phpbb/download/file.php?id=247 needs
-            # at least 150kB of image data.
-            data = blobstore.fetch_data(blob_info, 0, 200000) 
-            try:
-                width, height = peekimagedata.peek_dimensions(data)
-                mimetype = peekimagedata.peek_mimetype(data)
-            except ValueError:
-                logging.warning("Failed to peek, skipping")
-                blob_info.delete()
-                continue
-
-            if blob_info.content_type != mimetype:
-                logging.warning("Sniffed mimetype didn't match, skipping")
-                blob_info.delete()
-                continue
-            
-            store_blob(blob_info.key(), width, height)
-
-        self.redirect('/')
-
-
-class ServeIdHandler(blobstore_handlers.BlobstoreDownloadHandler):
-    def get(self, resource):
-        photo = Photo.cached_by_id(int(resource))
-        if not photo: return
-        # Serving from photo.serving_url() would be a lot faster,
-        # but redirecting to there leaks the serving URL to the user. Since
-        # most people hopefully won't click through to the image, take the
-        # speed hit.
-        self.send_blob(photo.blob_key)
 
 # Note: Instead of centering by setting an explicit width on body, wrapping
 # image and g+ button in a div, setting body to text-align:center and the div
@@ -228,6 +183,54 @@ class ServeImageHandler(webapp2.RequestHandler):
         img_url = photo.serving_url()
         self.response.out.write(
             image_html % (photo.width, url, img_url, photo.width, photo.height))
+
+
+class ServeIdHandler(blobstore_handlers.BlobstoreDownloadHandler):
+    def get(self, resource):
+        photo = Photo.cached_by_id(int(resource))
+        if not photo: return
+        # Serving from photo.serving_url() would be a lot faster,
+        # but redirecting to there leaks the serving URL to the user. Since
+        # most people hopefully won't click through to the image, take the
+        # speed hit.
+        self.send_blob(photo.blob_key)
+
+
+class UploadHandler(blobstore_handlers.BlobstoreUploadHandler):
+    def post(self):
+        # 'file' is file upload field in the form
+        upload_files = self.get_uploads('file')
+        for blob_info in upload_files:
+            if blob_info.content_type not in content_types.split(','):
+                # Ignore non-images.
+                logging.warning("Invalid mimetype %s, skipping"
+                                % blob_info.content_type)
+                blob_info.delete()
+                continue
+
+            # images.Image doesn't have width and height when built from a
+            # blob_key.  The documentation doesn't state that it's safe to
+            # build an images.Image with partial data, so manually sniff image
+            # dimensions.
+            # http://thejapanesepage.com/phpbb/download/file.php?id=247 needs
+            # at least 150kB of image data.
+            data = blobstore.fetch_data(blob_info, 0, 200000) 
+            try:
+                width, height = peekimagedata.peek_dimensions(data)
+                mimetype = peekimagedata.peek_mimetype(data)
+            except ValueError:
+                logging.warning("Failed to peek, skipping")
+                blob_info.delete()
+                continue
+
+            if blob_info.content_type != mimetype:
+                logging.warning("Sniffed mimetype didn't match, skipping")
+                blob_info.delete()
+                continue
+            
+            store_blob(blob_info.key(), width, height)
+
+        self.redirect('/')
 
 
 # NOTE: This is an experimental, unsupported api.
@@ -271,20 +274,6 @@ def write_image_blob(data, name):
     store_blob(blob_key, width, height)
 
 
-class ReceiveMailHandler(InboundMailHandler):
-    def receive(self, received_mail):
-
-        # XXX: Look at HTML input, grab <img> tags.
-
-        # http://code.google.com/p/googleappengine/issues/detail?id=6342
-        if not hasattr(message, 'attachments'):
-            logging.warning("No attachment on email")
-            return
-
-        for name, contents in received_mail.attachments:
-            write_image_blob(contents.decode(), name)
-
-
 class GrabHandler(webapp2.RequestHandler):
     def post(self):
         url = self.request.get('url', '')
@@ -303,11 +292,25 @@ class GrabHandler(webapp2.RequestHandler):
         self.redirect('/')
 
 
+class ReceiveMailHandler(InboundMailHandler):
+    def receive(self, received_mail):
+
+        # XXX: Look at HTML input, grab <img> tags.
+
+        # http://code.google.com/p/googleappengine/issues/detail?id=6342
+        if not hasattr(message, 'attachments'):
+            logging.warning("No attachment on email")
+            return
+
+        for name, contents in received_mail.attachments:
+            write_image_blob(contents.decode(), name)
+
+
 app = webapp2.WSGIApplication([
     ('/', MainHandler),
-    ('/upload', UploadHandler),
-    ('/id/([^/]+)?', ServeIdHandler),
-    ('/grab', GrabHandler),
     ('/i/([^/]+)?', ServeImageHandler),
+    ('/id/([^/]+)?', ServeIdHandler),
+    ('/upload', UploadHandler),
+    ('/grab', GrabHandler),
     ReceiveMailHandler.mapping(),
     ], debug=True)
