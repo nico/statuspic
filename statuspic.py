@@ -249,8 +249,9 @@ def write_image_blob(data, name):
     try:
       sniffed_mimetype = peekimagedata.peek_mimetype(data)
       width, height = peekimagedata.peek_dimensions(data)
-    except ValueError:
-      logging.warning("Failed to get dimensions/mimetype, skipping '%s'" % name)
+    except ValueError as e:
+      logging.warning("Failed to get dimensions/mimetype, skipping '%s': %s" %
+                      (name, e))
       return
 
     if sniffed_mimetype != mimetype:
