@@ -79,9 +79,14 @@ main_html_head = """\
 body {
   max-width: 800px;
   margin: 20px auto;
+  font-family: Arial,sans-serif;
+  font-size: 11pt;
 }
 img {
   vertical-align: text-bottom;
+}
+footer {
+  font-size:9pt;
 }
 </style>
 </head>
@@ -100,7 +105,10 @@ onchange="if (this.value) this.parentNode.submit();"><br>
 Grab File from Web: <input type="text" name="url"><input type="submit">
 </form>
 <p>Or email images to <a href="mailto:mail@statuspic.appspotmail.com"
->mail@statuspic.appspotmail.com</a>
+>mail@statuspic.appspotmail.com</a></p>
+<footer><a href="https://github.com/nico/statuspic">github</a></footer>
+</body>
+</html>
 """
 
 def get_pics(update):
