@@ -17,6 +17,9 @@ from google.appengine.api import memcache
 
 from google.appengine.ext.webapp.mail_handlers import InboundMailHandler
 
+# For some reason, putting 'peekimagedata' into submodules.pth doesn't work?
+import sys
+sys.path.insert(0, 'peekimagedata')
 import peekimagedata
 
 
