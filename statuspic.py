@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import urllib
 import urllib2
 import urlparse
@@ -162,6 +163,13 @@ def get_main_html(update=False):
 
 class MainHandler(webapp2.RequestHandler):
     def get(self):
+        # Make 1234.i.statuspic.appspot.com work.
+        imgid = re.findall(r'^(\d+)\.', self.request.host)
+        if imgid:
+            image_handler = ServeImageHandler()
+            image_handler.initialize(self.request, self.response)
+            return image_handler.get(imgid[0])
+
         self.response.write(get_main_html())
 
 
