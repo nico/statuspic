@@ -225,6 +225,10 @@ class ServeImageHandler(webapp2.RequestHandler):
         # the same image through a BlobstoreDownloadHandler takes 3s for the
         # same image.
         url = '../id/%s' % photo.key().id()
+        url += {
+          'image/jpeg': '.jpeg',
+          'image/png': '.png',
+        }.get(photo.blob_key.content_type, '')
         img_url = photo.serving_url()
         self.response.out.write(
             image_html % (photo.width, url, img_url, photo.width, photo.height))
@@ -232,6 +236,7 @@ class ServeImageHandler(webapp2.RequestHandler):
 
 class ServeIdHandler(blobstore_handlers.BlobstoreDownloadHandler):
     def get(self, resource):
+        logging.info(resource)
         photo = Photo.cached_by_id(int(resource))
         if not photo: return
         # Serving from photo.serving_url() would be a lot faster,
@@ -353,8 +358,8 @@ class ReceiveMailHandler(InboundMailHandler):
 
 app = webapp2.WSGIApplication([
     ('/', MainHandler),
-    ('/i/([^/]+)?', ServeImageHandler),
-    ('/id/([^/]+)?', ServeIdHandler),
+    ('/i/(\d+)', ServeImageHandler),
+    ('/id/(\d+)(?:\.jpe?g|\.png)?', ServeIdHandler),
     ('/upload', UploadHandler),
     ('/grab', GrabHandler),
     ReceiveMailHandler.mapping(),
