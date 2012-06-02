@@ -200,6 +200,7 @@ _gaq.push(['_trackPageview']);
   var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
 })();
 </script>
+<link rel="canonical" href="%s">
 </head>
 <body>
 <a href="%s"><img src="%s" width="%d" height="%d"></a>
@@ -221,6 +222,8 @@ class ServeImageHandler(webapp2.RequestHandler):
         if not photo:
             self.abort(404)
 
+        canon = 'http://statuspic.appspot.com/i/' + resource
+
         # Images from get_serving_url() can be served at 0.5MB / 50ms. Serving
         # the same image through a BlobstoreDownloadHandler takes 3s for the
         # same image.
@@ -230,8 +233,8 @@ class ServeImageHandler(webapp2.RequestHandler):
           'image/png': '.png',
         }.get(photo.blob_key.content_type, '')
         img_url = photo.serving_url()
-        self.response.out.write(
-            image_html % (photo.width, url, img_url, photo.width, photo.height))
+        self.response.out.write(image_html %
+            (photo.width, canon, url, img_url, photo.width, photo.height))
 
 
 class ServeIdHandler(blobstore_handlers.BlobstoreDownloadHandler):
