@@ -351,7 +351,7 @@ class ReceiveMailHandler(InboundMailHandler):
         # XXX: Look at HTML input, grab <img> tags.
 
         # http://code.google.com/p/googleappengine/issues/detail?id=6342
-        if not hasattr(message, 'attachments'):
+        if not hasattr(received_mail, 'attachments'):
             logging.warning("No attachment on email")
             return
 
