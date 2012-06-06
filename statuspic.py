@@ -157,7 +157,9 @@ def get_main_html(update=False):
     html = memcache.get(key)
     if not html or update:
         html = build_main_html(update)
-        memcache.set(key, html)
+
+        # blobstore upload urls expire after a while, so time-limit cache.
+        memcache.set(key, html, time=5*60)  # seconds
     return html
     
 
